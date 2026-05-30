@@ -1,0 +1,18 @@
+# Dependencies (none for this static project)
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Changelog / dev notes (contains AI conversation transcript)
+devlog.txt

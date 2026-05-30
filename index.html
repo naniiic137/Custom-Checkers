@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Custom Checkers</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div id="toast" class="toast hidden"></div>
+
+    <div id="game-over-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Game Over</h2>
+        <p id="winner-text"></p>
+        <p id="winner-reason" class="reason"></p>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="play-again-btn">Play Again</button>
+          <button class="btn btn-secondary" id="settings-btn">Settings</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="undo-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Undo Request</h2>
+        <p id="undo-request-text">Opponent wants to undo their last move.</p>
+        <p class="reason" id="undo-responder">Do you approve?</p>
+        <div class="modal-actions undo-actions">
+          <button class="btn btn-primary" id="undo-yes-btn">Yes, Undo</button>
+          <button class="btn btn-secondary" id="undo-no-btn">No, Keep Move</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="mp-overlay" class="mp-overlay hidden">
+      <div class="mp-overlay-inner">
+        <div class="mp-spinner" id="mp-spinner"></div>
+        <h2 id="mp-status-text">Waiting...</h2>
+        <p id="mp-status-detail"></p>
+      </div>
+    </div>
+
+    <div id="settings-panel" class="panel">
+      <h1 class="title">Custom Checkers</h1>
+      <p class="subtitle">Configure your game rules and start playing</p>
+
+      <div class="settings-grid">
+      <div class="settings-section">
+        <h2 class="section-title">Board</h2>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-boardSize">Board Size</label>
+            <span class="setting-desc">Width and height of the board (4–20)</span>
+          </div>
+          <input type="number" id="setting-boardSize" value="8">
+        </div>
+        <div class="preset-group" data-target="setting-boardSize">
+          <button class="preset-btn" data-value="6">6</button>
+          <button class="preset-btn active" data-value="8">8</button>
+          <button class="preset-btn" data-value="10">10</button>
+          <button class="preset-btn" data-value="12">12</button>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-rowsPerPlayer">Piece Rows</label>
+            <span class="setting-desc">Rows of pieces per player (1–10)</span>
+          </div>
+          <input type="number" id="setting-rowsPerPlayer" value="3">
+        </div>
+        <div class="preset-group" data-target="setting-rowsPerPlayer">
+          <button class="preset-btn" data-value="1">1</button>
+          <button class="preset-btn" data-value="2">2</button>
+          <button class="preset-btn active" data-value="3">3</button>
+          <button class="preset-btn" data-value="4">4</button>
+          <button class="preset-btn" data-value="5">5</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2 class="section-title">Rules</h2>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Mandatory Capture</label>
+            <span class="setting-desc">Must capture when a jump is available</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-mandatoryCapture" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-kingMove">Default King</label>
+            <span class="setting-desc" id="king-move-desc">♛ One step diagonally</span>
+          </div>
+          <select id="setting-kingMove">
+            <option value="standard">♛ Standard</option>
+            <option value="flying">✦ Flying</option>
+            <option value="queen">♕ Queen</option>
+            <option value="knight">♞ Knight</option>
+            <option value="crown">♔ Crown</option>
+            <option value="random">❓ Random</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label>Active King Types</label>
+            <span class="setting-desc">Which king modes are available for promotion &amp; random</span>
+          </div>
+        </div>
+        <div class="king-mode-chips" id="king-mode-chips">
+          <label class="mode-chip" data-mode="standard">
+            <input type="checkbox" value="standard" checked>
+            <span>♛ Standard</span>
+          </label>
+          <label class="mode-chip" data-mode="flying">
+            <input type="checkbox" value="flying" checked>
+            <span>✦ Flying</span>
+          </label>
+          <label class="mode-chip" data-mode="queen">
+            <input type="checkbox" value="queen" checked>
+            <span>♕ Queen</span>
+          </label>
+          <label class="mode-chip" data-mode="knight">
+            <input type="checkbox" value="knight" checked>
+            <span>♞ Knight</span>
+          </label>
+          <label class="mode-chip" data-mode="crown">
+            <input type="checkbox" value="crown" checked>
+            <span>♔ Crown</span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Shuffle on Move</label>
+            <span class="setting-desc">King randomly changes type after each move</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-shuffleKingOnMove">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Backward Move</label>
+            <span class="setting-desc">Pawns can move one step backward</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-backwardMove">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Backward Capture</label>
+            <span class="setting-desc">Allow pawns to capture backwards</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-backwardCapture">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Kings Can Be Captured</label>
+            <span class="setting-desc">Kings can be captured like regular pieces</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-kingsCanBeCaptured" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Promote on Any Back Rank</label>
+            <span class="setting-desc">Pieces promote when reaching either back rank</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-promoteAnyBack">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Random Promotion</label>
+            <span class="setting-desc">Promoted pieces get a random king mode</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-randomPromotion">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Double Capture Kings</label>
+            <span class="setting-desc">Kings are downgraded on first capture, removed on second</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-doubleCaptureKings">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Suicide Mode</label>
+            <span class="setting-desc">First to lose all pieces wins</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-suicideMode">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Stalemate Wins</label>
+            <span class="setting-desc">Player with no moves wins instead of losing</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-stalemateWins">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Draw Limit</label>
+            <span class="setting-desc">End game after N moves without a capture</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-drawLimitEnabled">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-drawLimitBlack">Black limit</label>
+          </div>
+          <input type="number" id="setting-drawLimitBlack" value="40">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-drawLimitWhite">White limit</label>
+          </div>
+          <input type="number" id="setting-drawLimitWhite" value="40">
+        </div>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Link limits</label>
+            <span class="setting-desc">Same limit for both players</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-drawLimitLinked" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-startingPlayer">Starting Player</label>
+            <span class="setting-desc">Who moves first in the game</span>
+          </div>
+          <select id="setting-startingPlayer">
+            <option value="black">Black</option>
+            <option value="white">White</option>
+            <option value="random" selected>Random</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2 class="section-title">Timer</h2>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-timer">Per Player</label>
+            <span class="setting-desc">Time limit for the entire game per player</span>
+          </div>
+          <select id="setting-timer">
+            <option value="0">No Timer</option>
+            <option value="30">30s</option>
+            <option value="60">1m</option>
+            <option value="120">2m</option>
+            <option value="300">5m</option>
+            <option value="600">10m</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn-secondary btn-lg" id="toggle-visual-btn">Show Visual Settings</button>
+      <div class="settings-section hidden" id="visual-section">
+        <h2 class="section-title">Visual</h2>
+        <div class="setting-row toggle-row">
+          <div class="setting-label">
+            <label>Highlight Moves</label>
+            <span class="setting-desc">Show valid moves when selecting a piece</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-highlightMoves" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-pieceStyle">Piece Style</label>
+            <span class="setting-desc">Visual style of the pieces</span>
+          </div>
+          <select id="setting-pieceStyle">
+            <option value="classic">Classic</option>
+            <option value="modern">Modern</option>
+            <option value="flat">Flat</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="setting-colorScheme">Color Scheme</label>
+            <span class="setting-desc">Board color theme</span>
+          </div>
+          <select id="setting-colorScheme">
+            <option value="classic">Classic</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="highcontrast">High Contrast</option>
+          </select>
+        </div>
+      </div>
+      </div>
+
+      <button class="btn btn-secondary btn-lg" id="toggle-editor-btn">Show Board Editor</button>
+
+      <div class="settings-section editor-section hidden" id="editor-section">
+        <h2 class="section-title">Board Editor</h2>
+        <p class="editor-hint">Click dark squares to place or remove pieces</p>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="editor-boardSize">Editor Board Size</label>
+            <span class="setting-desc">Size for the editor board</span>
+          </div>
+          <input type="number" id="editor-boardSize" value="8">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label for="editor-rowsPerPlayer">Editor Piece Rows</label>
+            <span class="setting-desc">Rows when resetting editor</span>
+          </div>
+          <input type="number" id="editor-rowsPerPlayer" value="3">
+        </div>
+        <div class="editor-toolbar">
+          <div class="editor-tool-group">
+            <label for="editor-color">Piece</label>
+            <select id="editor-color">
+              <option value="black">Black</option>
+              <option value="white">White</option>
+            </select>
+          </div>
+          <div class="editor-tool-group">
+            <label for="editor-king">King Mode</label>
+            <select id="editor-king">
+              <option value="none">None</option>
+              <option value="standard">Standard</option>
+              <option value="flying">Flying</option>
+              <option value="queen">Queen</option>
+              <option value="knight">Knight</option>
+              <option value="crown">Crown</option>
+              <option value="random">Random</option>
+            </select>
+          </div>
+        </div>
+        <div class="editor-actions">
+          <button class="btn btn-small btn-secondary" id="editor-clear-btn">Clear Board</button>
+          <button class="btn btn-small btn-secondary" id="editor-reset-btn">Default</button>
+        </div>
+        <div id="editor-board-wrapper">
+          <div id="editor-board"></div>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn btn-primary btn-lg" id="start-game-btn">Start Game</button>
+        <button class="btn btn-secondary btn-lg" id="generate-link-btn">Generate Share Link</button>
+      </div>
+    </div>
+
+    <div id="game-panel" class="panel hidden">
+      <div id="game-header">
+        <span id="role-badge" class="role-badge hidden"></span>
+        <div id="turn-indicator">
+          <span id="turn-text">Black's Turn</span>
+        </div>
+        <div id="timer-display" class="hidden">
+          <span id="timer-black">5:00</span>
+          <span id="timer-sep">|</span>
+          <span id="timer-white">5:00</span>
+        </div>
+        <button class="btn btn-small btn-secondary" id="back-to-settings-btn">Exit</button>
+      </div>
+
+      <div id="board-wrapper">
+        <div id="board"></div>
+      </div>
+
+      <div id="game-footer">
+        <div id="captured-info">
+          <span id="captured-black">Black: 0</span>
+          <span id="captured-white">White: 0</span>
+        </div>
+        <div id="footer-actions">
+          <span id="turn-counter">Turn 1</span>
+          <button class="btn btn-small btn-secondary" id="undo-btn">Undo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
