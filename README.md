@@ -1,104 +1,102 @@
 # Custom Checkers
 
-A fully customizable checkers game with extensive rules, board editor, shareable links, and real-time multiplayer.
+**Checkers with the rules unlocked:** pick the board size, choose from 6 king movement modes, tune 20+ settings, design your own starting position, and play a friend online over a peer-to-peer connection. It's a static web app with no build step and no backend.
+
+![Game in progress: a queen king selected, with capture moves highlighted in red and normal moves in purple](docs/screenshots/game.png)
+
+| Rules panel | Board editor (10×10, custom kings) |
+| --- | --- |
+| ![Settings panel with board size presets, king modes and rule toggles](docs/screenshots/settings.png) | ![Board editor with a 10x10 board and flying, queen and knight kings placed](docs/screenshots/editor.png) |
 
 ## Features
 
-### Game Rules
-- Adjustable board size (custom number input, no limits)
-- Adjustable piece rows per player
-- 6 king movement modes: Standard, Flying, Queen, Knight, Crown, Random
-- Active King Types chips — select which modes are active
-- Shuffle on Move — king changes mode randomly after each move
-- Backward Move — pawns can move one step backward
-- Backward Capture — pawns can capture backward
-- Kings Can Be Captured toggle
-- Promote on Any Back Rank
-- Random Promotion — promoted pieces get a random king mode
-- Double Capture Kings — king downgraded on first capture, removed on second
-- Suicide Mode — first to lose all pieces wins
-- Stalemate Wins — player with no moves wins instead of losing
-- Draw Limit — per-player move limits with linked/unlinked inputs
-- Mandatory Capture toggle
-- Starting Player: Black, White, or Random (default)
-- Per-player timer (30s to 10m)
+### Game rules
+- **Board:** any board size via a number input (with 6 / 8 / 10 / 12 presets) and adjustable piece rows per player
+- **6 king movement modes:**
+  | Mode | Icon | Movement |
+  | --- | --- | --- |
+  | Standard | ♛ | One step diagonally (traditional checkers) |
+  | Flying | ✦ | Slides any distance diagonally, jumps over pieces |
+  | Queen | ♕ | Slides any distance in 8 directions |
+  | Knight | ♞ | L-shaped jumps like a chess knight |
+  | Crown | ♔ | One step in any direction + knight jumps |
+  | Random | ❓ | Picks a random active mode each move |
+- **Active King Types:** chips that choose which modes are used for promotion and randomness
+- **King variants:** Shuffle on Move (the king changes mode after each move), Random Promotion, Double Capture Kings (downgraded on the first capture, removed on the second), Kings Can Be Captured
+- **Pawn variants:** Backward Move, Backward Capture, Promote on Any Back Rank
+- **Win conditions:** Suicide Mode (the first player to lose all pieces wins), Stalemate Wins (a player with no moves wins instead of losing)
+- **Draw Limit:** per-player move limits without a capture, with linked or independent inputs
+- **Mandatory Capture** toggle, multi-jump chains, **Starting Player** (Black, White or Random)
+- **Per-player timer:** 30s, 1m, 2m, 5m or 10m
 
-### Board Editor
-- Hidden behind toggle button
-- Own independent board size and piece rows
-- Place/remove pieces on dark squares
-- Piece color selector (Black/White) and king mode (None/Standard/Flying/Queen/Knight/Crown/Random)
-- Clear Board and Default buttons
-- Editor board data included in share links
+### Board editor
+- Hidden behind a toggle, with its own board size and piece rows
+- Click dark squares to place or remove pieces, choosing the colour (Black/White) and king mode (None/Standard/Flying/Queen/Knight/Crown/Random)
+- **Clear Board** and **Default** buttons
+- The edited board is used when the game starts and is included in share links
 
-### Visual
-- 4 color schemes: Classic, Green, Blue, High Contrast
+### Visuals
+- 4 colour schemes: Classic, Green, Blue, High Contrast
 - 3 piece styles: Classic, Modern, Flat
-- Distinct king mode icons: ♛ Standard, ✦ Flying, ♕ Queen, ♞ Knight, ♔ Crown, ❓ Random
-- Highlight valid moves toggle
-- Mobile-first responsive design
+- A distinct icon for each king mode
+- Optional highlighting of valid moves: purple for moves, red for captures, plus markers for the selected piece and the last move
+- Mobile-first responsive layout
 
-### Multiplayer
-- Real-time peer-to-peer via WebRTC (PeerJS)
-- Host creates a room, shares a link
-- Guest joins and both play on their own devices
-- Turn-based with role enforcement (host = black, guest = white)
-- Full state sync after every move
-- "Play Again" keeps the same room — host can change settings between games
-- No backend server needed — works on static hosting
+### Undo
+- An undo request needs the opponent's approval in a modal
+- Full move history kept as board snapshots
+- Turned off in multiplayer
 
-### Sharing
-- Shareable links via URL query parameters
-- All settings encoded (board size, rules, king modes, etc.)
-- Board editor data encoded in `bd` parameter
-- Room ID in `room` parameter for multiplayer
+## How multiplayer works
 
-### Undo System
-- Request undo with opponent approval modal
-- Full move history with snapshots
-- Disabled in multiplayer mode
+Multiplayer runs **peer-to-peer over WebRTC** using [PeerJS](https://peerjs.com/). The game has no server of its own.
 
-## How to Use
+1. The host clicks **Generate Share Link**. The app creates a random room ID, registers it as the host's PeerJS ID, and copies a link to the clipboard.
+2. The link carries every setting as short URL query parameters, plus the custom board (`bd`) and the room ID (`room`).
+3. The guest opens the link and connects directly to the host's peer.
+4. The host presses **Start Game**. The host plays Black and the guest plays White, and each player can only move their own pieces.
+5. After every move, the full game state (board, turn, captures, move history, game-over status) is sent to the other player.
+6. **Play Again** keeps the same room, so the host can change settings between games.
 
-### Single Player (Pass-and-Play)
-1. Open `index.html` in a browser (must be served over HTTP)
-2. Configure game settings
-3. Press **Start Game**
-4. Both players take turns on the same device
+Share links also work without multiplayer. A link with settings (and, optionally, a custom board) opens straight into a game with those rules.
 
-### Multiplayer
-1. Host configures settings
-2. Host clicks **Generate Share Link**
-3. Host sends the copied URL to the guest
-4. Guest opens the URL in their browser
-5. Host clicks **Start Game** once both are connected
-6. Each player can only move their own pieces
+## Quick start
 
-### Board Editor
-1. Click **Show Board Editor**
-2. Set editor board size and piece rows
-3. Click dark squares to place/remove pieces
-4. Use piece color and king mode selectors
-5. Board is used when **Start Game** is clicked
+The app is plain HTML, CSS and JavaScript, so there is nothing to install or build. It has to be served over HTTP (not opened as `file://`):
 
-## Files
+```bash
+git clone https://github.com/naniiic137/Custom-Checkers.git
+cd Custom-Checkers
+python -m http.server 8000      # or: npx http-server -p 8000
+```
 
-- `index.html` — Main HTML with settings panel, game panel, modals, board editor, and multiplayer overlay
-- `style.css` — Mobile-first responsive CSS with 4 color schemes, 3 piece styles, king mode icons
-- `script.js` — All game logic, 20+ settings, board editor, undo system, timer, multiplayer, link sharing
+Then open <http://localhost:8000>.
 
-## Deploy to Netlify
+### Play
+- **Pass-and-play:** configure the rules and press **Start Game**. Both players take turns on the same device.
+- **Online:** click **Generate Share Link**, send the copied URL to a friend, and press **Start Game** once they have connected.
+- **Custom position:** click **Show Board Editor**, set the size, place pieces and kings, then start the game or generate a link.
 
-No build step required:
+### Deploy
+Any static host works: GitHub Pages, Netlify, etc. There's no build command, and the publish directory is the repository root. Multiplayer needs HTTPS on a public host, which both of these provide.
 
-1. Push this repo to GitHub
-2. Log in to [Netlify](https://app.netlify.com)
-3. Click **Add new site** → **Import an existing project**
-4. Connect your GitHub repository
-5. Deploy settings:
-   - **Branch:** `main`
-   - **Build command:** (leave empty)
-   - **Publish directory:** `/`
-6. Click **Deploy site**
+## Project structure
 
-Netlify will serve the static files directly. Multiplayer (PeerJS WebRTC) works on HTTPS automatically.
+```
+Custom-Checkers/
+├── index.html          # Settings panel, game panel, board editor, modals, multiplayer overlay
+├── style.css           # Mobile-first styles, 4 colour schemes, 3 piece styles, king icons
+├── script.js           # Rules engine, move generation, editor, undo, timer, share links, PeerJS sync
+└── docs/screenshots/   # README images
+```
+
+## Tech stack
+
+- **HTML5 / CSS3** (custom properties, CSS Grid for the board)
+- **Vanilla JavaScript** (ES6+, no framework, no bundler)
+- **PeerJS 1.5.4** (WebRTC data channels) loaded from a CDN
+- **URL query parameters** for shareable game configurations
+
+## Author
+
+Hamza Ben Ismail ([@naniiic137](https://github.com/naniiic137))

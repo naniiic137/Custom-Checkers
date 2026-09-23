@@ -281,7 +281,6 @@
     const cfg = { ...DEFAULT_CONFIG };
     if (raw.boardSize !== undefined) cfg.boardSize = +raw.boardSize;
     if (raw.rowsPerPlayer !== undefined) cfg.rowsPerPlayer = +raw.rowsPerPlayer;
-    ['mandatoryCapture', 'backwardMove', 'backwardCapture', 'kingsCanBeCaptured', 'promoteAnyBack', 'randomPromotion', 'doubleCaptureKings', 'suicideMode', 'stalemateWins', 'drawLimit', 'highlightMoves']
     ['mandatoryCapture', 'backwardMove', 'backwardCapture', 'kingsCanBeCaptured', 'promoteAnyBack', 'randomPromotion', 'doubleCaptureKings', 'suicideMode', 'stalemateWins', 'drawLimitEnabled', 'drawLimitLinked', 'highlightMoves', 'shuffleKingOnMove']
       .forEach(k => { if (raw[k] !== undefined) cfg[k] = raw[k] === '1'; });
     if (raw.kingMove !== undefined) cfg.kingMove = raw.kingMove;
@@ -1378,6 +1377,7 @@
       if (decodedBoard) {
         dom.toggleEditorBtn.textContent = 'Hide Board Editor';
         dom.editorSection.classList.remove('hidden');
+        dom.editorBoardSize.value = decodedBoard.length;
         initEditor(decodedBoard);
       }
       startGame(urlCfg);
