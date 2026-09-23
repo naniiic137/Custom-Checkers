@@ -1,6 +1,7 @@
 # Custom Checkers
 
 **Checkers with the rules unlocked:** pick the board size, choose from 6 king movement modes, tune 20+ settings, design your own starting position, and play a friend online over a peer-to-peer connection. It's a static web app with no build step and no backend.
+
 **▶ Play it online: [naniiic137.github.io/Custom-Checkers](https://naniiic137.github.io/Custom-Checkers/)**
 
 
