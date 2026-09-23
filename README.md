@@ -10,17 +10,19 @@
 
 ## Features
 
+### 6 king movement modes
+
+| Mode | Icon | Movement |
+| --- | --- | --- |
+| Standard | ♛ | One step diagonally (traditional checkers) |
+| Flying | ✦ | Slides any distance diagonally, jumps over pieces |
+| Queen | ♕ | Slides any distance in 8 directions |
+| Knight | ♞ | L-shaped jumps like a chess knight |
+| Crown | ♔ | One step in any direction + knight jumps |
+| Random | ❓ | Picks a random active mode each move |
+
 ### Game rules
 - **Board:** any board size via a number input (with 6 / 8 / 10 / 12 presets) and adjustable piece rows per player
-- **6 king movement modes:**
-  | Mode | Icon | Movement |
-  | --- | --- | --- |
-  | Standard | ♛ | One step diagonally (traditional checkers) |
-  | Flying | ✦ | Slides any distance diagonally, jumps over pieces |
-  | Queen | ♕ | Slides any distance in 8 directions |
-  | Knight | ♞ | L-shaped jumps like a chess knight |
-  | Crown | ♔ | One step in any direction + knight jumps |
-  | Random | ❓ | Picks a random active mode each move |
 - **Active King Types:** chips that choose which modes are used for promotion and randomness
 - **King variants:** Shuffle on Move (the king changes mode after each move), Random Promotion, Double Capture Kings (downgraded on the first capture, removed on the second), Kings Can Be Captured
 - **Pawn variants:** Backward Move, Backward Capture, Promote on Any Back Rank
