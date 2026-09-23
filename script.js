@@ -1,30 +1,15 @@
 (function () {
   'use strict';
 
-  // ===== CONFIGURATION =====
-  const CONFIG_MAP = {
-    sz: 'boardSize', rp: 'rowsPerPlayer', mc: 'mandatoryCapture',
-    km: 'kingMove', bm: 'backwardMove', bc: 'backwardCapture', kc: 'kingsCanBeCaptured',
-    pa: 'promoteAnyBack', rr: 'randomPromotion', dk: 'doubleCaptureKings',
-    sm: 'suicideMode', sw: 'stalemateWins', dl: 'drawLimitEnabled',
-    db: 'drawLimitBlack', dw: 'drawLimitWhite', dq: 'drawLimitLinked',
-    sk: 'shuffleKingOnMove', ak: 'activeKingModes',
-    sp: 'startingPlayer', tm: 'timer',
-    hm: 'highlightMoves', ps: 'pieceStyle', cs: 'colorScheme',
-  };
-
-  const DEFAULT_CONFIG = {
-    boardSize: 8, rowsPerPlayer: 3, mandatoryCapture: true,
-    kingMove: 'standard', backwardMove: false, backwardCapture: false, kingsCanBeCaptured: true,
-    promoteAnyBack: false, randomPromotion: false, doubleCaptureKings: false,
-    suicideMode: false, stalemateWins: false,
-    shuffleKingOnMove: false, activeKingModes: 'standard,flying,queen,knight,crown',
-    drawLimitEnabled: false, drawLimitBlack: 40, drawLimitWhite: 40, drawLimitLinked: true,
-    startingPlayer: 'random', timer: 0,
-    highlightMoves: true, pieceStyle: 'classic', colorScheme: 'classic',
-  };
+  // Rules live in engine.js (pure, unit-tested); this file is the UI, the editor, the
+  // timer, share links and the PeerJS connection.
+  const E = window.CheckersEngine;
+  const { CONFIG_MAP, DEFAULT_CONFIG, MIN_SIZE, MAX_SIZE, isDark, opp, cap, cloneBoard, clampInt } = E;
 
   // ===== MULTIPLAYER STATE =====
+  const HEARTBEAT_MS = 2000;      // both sides ping this often
+  const PEER_TIMEOUT_MS = 7000;   // silence this long means the other side is gone
+  const MAX_ID_RETRIES = 5;
   let mp = {
     role: null,      // 'host' | 'guest' | null
     peer: null,
@@ -32,11 +17,8 @@
     roomId: null,
     connected: false,
     receivedSettings: null,
-  };
-
-  const KING_SYMBOLS = {
-    standard: '♛', flying: '✦', queen: '♕',
-    knight: '♞', crown: '♔', random: '❓',
+    lastSeen: 0,
+    heartbeat: null,
   };
 
   const KING_DESCRIPTIONS = {
@@ -59,8 +41,8 @@
     dom.timerDisplay = $('#timer-display');
     dom.timerBlack = $('#timer-black');
     dom.timerWhite = $('#timer-white');
-    dom.capturedBlack = $('#captured-black');
-    dom.capturedWhite = $('#captured-white');
+    dom.statusBlack = $('#status-black');
+    dom.statusWhite = $('#status-white');
     dom.turnCounter = $('#turn-counter');
     dom.toast = $('#toast');
     dom.gameOverModal = $('#game-over-modal');
@@ -70,13 +52,9 @@
     dom.settingsBtn = $('#settings-btn');
     dom.backToSettingsBtn = $('#back-to-settings-btn');
     dom.startGameBtn = $('#start-game-btn');
-    dom.generateLinkBtn = $('#generate-link-btn');
+    dom.shareLinkBtn = $('#share-link-btn');
+    dom.inviteBtn = $('#invite-btn');
     dom.undoBtn = $('#undo-btn');
-    dom.undoModal = $('#undo-modal');
-    dom.undoRequestText = $('#undo-request-text');
-    dom.undoResponder = $('#undo-responder');
-    dom.undoYesBtn = $('#undo-yes-btn');
-    dom.undoNoBtn = $('#undo-no-btn');
     dom.settingBoardSize = $('#setting-boardSize');
     dom.settingRowsPerPlayer = $('#setting-rowsPerPlayer');
     dom.settingMandatoryCapture = $('#setting-mandatoryCapture');
@@ -116,6 +94,8 @@
     dom.mpSpinner = $('#mp-spinner');
     dom.mpStatusText = $('#mp-status-text');
     dom.mpStatusDetail = $('#mp-status-detail');
+    dom.mpLink = $('#mp-link');
+    dom.mpActions = $('#mp-actions');
   }
 
   // ===== STATE =====
@@ -131,74 +111,14 @@
   let lastMove = null;
   let timerState = null;
   let moveHistory = [];
-  let undoRequestActive = false;
   let noCaptureStreakBlack = 0;
   let noCaptureStreakWhite = 0;
   let editorBoardData = null;
+  let mustCaptureHint = [];   // squares flashed when a forced capture is ignored
 
-  // ===== UTILITY =====
-  function onBoard(r, c) { return r >= 0 && r < config.boardSize && c >= 0 && c < config.boardSize; }
-  function isDark(r, c) { return (r + c) % 2 === 1; }
-  function opp(color) { return color === 'black' ? 'white' : 'black'; }
-  function cloneBoard(b) { return b.map(row => row.map(cell => cell ? { ...cell } : null)); }
-  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
-  // ===== BOARD DATA ENCODING (for share links) =====
-  const PIECE_CHARS = {
-    'b': c => ({ color: 'black', king: false }),
-    'w': c => ({ color: 'white', king: false }),
-    's': c => ({ color: 'black', king: 'standard' }),
-    'f': c => ({ color: 'black', king: 'flying' }),
-    'q': c => ({ color: 'black', king: 'queen' }),
-    'k': c => ({ color: 'black', king: 'knight' }),
-    'c': c => ({ color: 'black', king: 'crown' }),
-    'S': c => ({ color: 'white', king: 'standard' }),
-    'F': c => ({ color: 'white', king: 'flying' }),
-    'Q': c => ({ color: 'white', king: 'queen' }),
-    'K': c => ({ color: 'white', king: 'knight' }),
-    'C': c => ({ color: 'white', king: 'crown' }),
-    'r': c => ({ color: 'black', king: 'random' }),
-    'R': c => ({ color: 'white', king: 'random' }),
-  };
-  const CHAR_FOR_PIECE = {};
-  for (const [ch, fn] of Object.entries(PIECE_CHARS)) {
-    const p = fn();
-    const key = p.color + '|' + (p.king || '');
-    CHAR_FOR_PIECE[key] = ch;
-  }
-
-  function encodeBoard(b) {
-    if (!b || b.length === 0) return '';
-    const size = b.length;
-    let data = '';
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const p = b[r][c];
-        if (!p) { data += '.'; continue; }
-        const key = p.color + '|' + (p.king || '');
-        data += CHAR_FOR_PIECE[key] || '.';
-      }
-    }
-    return size + ':' + data;
-  }
-
-  function decodeBoard(str) {
-    const colon = str.indexOf(':');
-    if (colon === -1) return null;
-    const size = parseInt(str.slice(0, colon), 10);
-    const data = str.slice(colon + 1);
-    if (isNaN(size) || size < 2 || size > 50 || data.length !== size * size) return null;
-    const b = Array.from({ length: size }, () => Array(size).fill(null));
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const ch = data[r * size + c];
-        if (ch === '.') continue;
-        const make = PIECE_CHARS[ch];
-        if (make) b[r][c] = make();
-      }
-    }
-    return b;
-  }
+  const boardSize = (v) => clampInt(v, MIN_SIZE, MAX_SIZE, DEFAULT_CONFIG.boardSize);
+  const rowsPerPlayer = (v) => clampInt(v, 1, 10, DEFAULT_CONFIG.rowsPerPlayer);
+  const myColor = () => (mp.role === 'host' ? 'black' : mp.role === 'guest' ? 'white' : null);
 
   function showToast(msg, dur) {
     const el = dom.toast;
@@ -211,8 +131,8 @@
   // ===== CONFIG =====
   function getSettingsFromUI() {
     return {
-      boardSize: Math.max(2, +dom.settingBoardSize.value || 8),
-      rowsPerPlayer: Math.max(0, +dom.settingRowsPerPlayer.value || 3),
+      boardSize: boardSize(dom.settingBoardSize.value),
+      rowsPerPlayer: rowsPerPlayer(dom.settingRowsPerPlayer.value),
       mandatoryCapture: dom.settingMandatoryCapture.checked,
       kingMove: dom.settingKingMove.value,
       backwardMove: dom.settingBackwardMove.checked,
@@ -224,8 +144,8 @@
       suicideMode: dom.settingSuicideMode.checked,
       stalemateWins: dom.settingStalemateWins.checked,
       drawLimitEnabled: dom.settingDrawLimitEnabled.checked,
-      drawLimitBlack: Math.max(1, +dom.settingDrawLimitBlack.value || 40),
-      drawLimitWhite: Math.max(1, +dom.settingDrawLimitWhite.value || 40),
+      drawLimitBlack: clampInt(dom.settingDrawLimitBlack.value, 1, 999, 40),
+      drawLimitWhite: clampInt(dom.settingDrawLimitWhite.value, 1, 999, 40),
       drawLimitLinked: dom.settingDrawLimitLinked.checked,
       shuffleKingOnMove: dom.settingShuffleKingOnMove.checked,
       activeKingModes: getActiveModesFromUI(),
@@ -237,19 +157,9 @@
     };
   }
 
-  const ALL_KING_MODES = ['standard', 'flying', 'queen', 'knight', 'crown'];
-
   function getActiveModesFromUI() {
     const chips = document.querySelectorAll('#king-mode-chips .mode-chip input:checked');
     return Array.from(chips).map(cb => cb.value).join(',') || 'standard';
-  }
-
-  function getActiveModes(cfg) {
-    if (cfg.activeKingModes && typeof cfg.activeKingModes === 'string') {
-      const list = cfg.activeKingModes.split(',').filter(Boolean);
-      if (list.length > 0) return list;
-    }
-    return ALL_KING_MODES;
   }
 
   function applyConfigToUI(cfg) {
@@ -269,31 +179,10 @@
     }
   }
 
-  function parseURLConfig() {
-    const params = new URLSearchParams(window.location.search);
-    let has = false;
-    const raw = {};
-    for (const [k, v] of params) {
-      if (k in CONFIG_MAP) { has = true; raw[CONFIG_MAP[k]] = v; }
-    }
-    if (!has) return null;
+  function baseURL() { return window.location.href.split('?')[0].split('#')[0]; }
 
-    const cfg = { ...DEFAULT_CONFIG };
-    if (raw.boardSize !== undefined) cfg.boardSize = +raw.boardSize;
-    if (raw.rowsPerPlayer !== undefined) cfg.rowsPerPlayer = +raw.rowsPerPlayer;
-    ['mandatoryCapture', 'backwardMove', 'backwardCapture', 'kingsCanBeCaptured', 'promoteAnyBack', 'randomPromotion', 'doubleCaptureKings', 'suicideMode', 'stalemateWins', 'drawLimitEnabled', 'drawLimitLinked', 'highlightMoves', 'shuffleKingOnMove']
-      .forEach(k => { if (raw[k] !== undefined) cfg[k] = raw[k] === '1'; });
-    if (raw.kingMove !== undefined) cfg.kingMove = raw.kingMove;
-    if (raw.startingPlayer !== undefined) cfg.startingPlayer = raw.startingPlayer;
-    if (raw.timer !== undefined) cfg.timer = +raw.timer;
-    if (raw.drawLimitBlack !== undefined) cfg.drawLimitBlack = +raw.drawLimitBlack;
-    if (raw.drawLimitWhite !== undefined) cfg.drawLimitWhite = +raw.drawLimitWhite;
-    if (raw.pieceStyle !== undefined) cfg.pieceStyle = raw.pieceStyle;
-    if (raw.colorScheme !== undefined) cfg.colorScheme = raw.colorScheme;
-    if (raw.activeKingModes !== undefined) cfg.activeKingModes = raw.activeKingModes;
-    return cfg;
-  }
-
+  // A link that opens a local game with these rules (and the edited position, if the
+  // editor is open). It never creates or joins an online room.
   function generateShareURL() {
     const cfg = getSettingsFromUI();
     const p = new URLSearchParams();
@@ -303,247 +192,49 @@
       p.set(short, String(v));
     }
     if (!dom.editorSection.classList.contains('hidden') && editorBoardData !== null && editorBoardData.length > 0) {
-      const enc = encodeBoard(editorBoardData);
+      const enc = E.encodeBoard(editorBoardData);
       if (enc) p.set('bd', enc);
     }
-    if (mp.role === 'host' && mp.roomId) {
-      p.set('room', mp.roomId);
-    }
-    return window.location.href.split('?')[0] + '?' + p.toString();
+    return baseURL() + '?' + p.toString();
   }
 
-  // ===== BOARD SETUP =====
-  function createBoard(cfg) {
-    const b = Array.from({ length: cfg.boardSize }, () => Array(cfg.boardSize).fill(null));
-    const rows = Math.min(cfg.rowsPerPlayer, Math.floor(cfg.boardSize / 2));
-    for (let r = 0; r < rows; r++)
-      for (let c = 0; c < cfg.boardSize; c++)
-        if (isDark(r, c)) b[r][c] = { color: 'black', king: false };
-    for (let r = cfg.boardSize - rows; r < cfg.boardSize; r++)
-      for (let c = 0; c < cfg.boardSize; c++)
-        if (isDark(r, c)) b[r][c] = { color: 'white', king: false };
-    return b;
-  }
+  function inviteURL() { return baseURL() + '?room=' + encodeURIComponent(mp.roomId); }
 
-  // ===== MOVE GENERATION =====
-  function moveDirs(piece, cfg) {
-    if (piece.king) return [[1, 1], [1, -1], [-1, 1], [-1, -1]];
-    const f = piece.color === 'black' ? 1 : -1;
-    const dirs = [[f, -1], [f, 1]];
-    if (cfg && cfg.backwardMove) dirs.push([-f, -1], [-f, 1]);
-    return dirs;
-  }
-
-  function captureDirs(piece, cfg) {
-    if (piece.king) return [[1, 1], [1, -1], [-1, 1], [-1, -1]];
-    const f = piece.color === 'black' ? 1 : -1;
-    const d = [[f, -1], [f, 1]];
-    if (cfg.backwardCapture) d.push([-f, -1], [-f, 1]);
-    return d;
-  }
-
-  function getKingMode(piece, cfg) {
-    if (!piece.king) return null;
-    if (piece.king === 'random') {
-      const modes = cfg ? getActiveModes(cfg) : ALL_KING_MODES;
-      return modes[Math.floor(Math.random() * modes.length)];
-    }
-    return piece.king;
-  }
-
-  function getMovesForPiece(b, r, c, cfg) {
-    const piece = b[r][c];
-    if (!piece) return [];
-    const moves = [];
-    const km = getKingMode(piece, cfg);
-
-    if (km) {
-      if (km === 'knight') { knightMoves(b, r, c, piece, cfg, moves); return moves; }
-      if (km === 'crown') { crownMoves(b, r, c, piece, cfg, moves); return moves; }
-      if (km === 'queen') { queenMoves(b, r, c, piece, cfg, moves); return moves; }
-      if (km === 'flying') {
-        const mDirs = moveDirs(piece, cfg);
-        for (const [dr, dc] of mDirs) flyingRegular(b, r, c, dr, dc, cfg, moves);
-        const cDirs = captureDirs(piece, cfg);
-        for (const [dr, dc] of cDirs) flyingCapture(b, r, c, dr, dc, piece, cfg, moves);
-        return moves;
-      }
-    }
-
-    const mDirs = moveDirs(piece, cfg);
-    for (const [dr, dc] of mDirs) simpleMove(b, r, c, dr, dc, moves);
-    const cDirs = captureDirs(piece, cfg);
-    for (const [dr, dc] of cDirs) simpleCapture(b, r, c, dr, dc, piece, cfg, moves);
-    return moves;
-  }
-
-  function queenMoves(b, r, c, piece, cfg, moves) {
-    const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-    for (const [dr, dc] of dirs) {
-      queenSlide(b, r, c, dr, dc, piece, cfg, moves);
-    }
-  }
-
-  function queenSlide(b, r, c, dr, dc, piece, cfg, moves) {
-    let found = false, fr, fc;
-    for (let s = 1; s < cfg.boardSize; s++) {
-      const nr = r + dr * s, nc = c + dc * s;
-      if (!onBoard(nr, nc)) break;
-      if (!found) {
-        if (!b[nr][nc]) {
-          moves.push({ row: nr, col: nc, capture: false });
-        } else if (b[nr][nc].color !== piece.color) {
-          if (cfg.kingsCanBeCaptured || !b[nr][nc].king) {
-            found = true; fr = nr; fc = nc;
-          } else break;
-        } else break;
-      } else {
-        if (b[nr][nc]) break;
-        moves.push({ row: nr, col: nc, capture: true, capturedRow: fr, capturedCol: fc });
-      }
-    }
-  }
-
-  function knightMoves(b, r, c, piece, cfg, moves) {
-    const offsets = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
-    for (const [dr, dc] of offsets) {
-      const nr = r + dr, nc = c + dc;
-      if (!onBoard(nr, nc)) continue;
-      if (!b[nr][nc]) moves.push({ row: nr, col: nc, capture: false });
-      else if (b[nr][nc].color !== piece.color)
-        if (cfg.kingsCanBeCaptured || !b[nr][nc].king)
-          moves.push({ row: nr, col: nc, capture: true, capturedRow: nr, capturedCol: nc });
-    }
-  }
-
-  function crownMoves(b, r, c, piece, cfg, moves) {
-    const offsets = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-    for (const [dr, dc] of offsets) {
-      const nr = r + dr, nc = c + dc;
-      if (!onBoard(nr, nc)) continue;
-      if (!b[nr][nc]) moves.push({ row: nr, col: nc, capture: false });
-      else if (b[nr][nc].color !== piece.color)
-        if (cfg.kingsCanBeCaptured || !b[nr][nc].king)
-          moves.push({ row: nr, col: nc, capture: true, capturedRow: nr, capturedCol: nc });
-    }
-    const knightJumps = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
-    for (const [dr, dc] of knightJumps) {
-      const nr = r + dr, nc = c + dc;
-      if (!onBoard(nr, nc)) continue;
-      if (!b[nr][nc]) moves.push({ row: nr, col: nc, capture: false });
-      else if (b[nr][nc].color !== piece.color)
-        if (cfg.kingsCanBeCaptured || !b[nr][nc].king)
-          moves.push({ row: nr, col: nc, capture: true, capturedRow: nr, capturedCol: nc });
-    }
-  }
-
-  function simpleMove(b, r, c, dr, dc, moves) {
-    const nr = r + dr, nc = c + dc;
-    if (onBoard(nr, nc) && !b[nr][nc]) {
-      moves.push({ row: nr, col: nc, capture: false });
-    }
-  }
-
-  function simpleCapture(b, r, c, dr, dc, piece, cfg, moves) {
-    const mr = r + dr, mc = c + dc;
-    if (!onBoard(mr, mc) || !b[mr][mc] || b[mr][mc].color === piece.color) return;
-    if (!cfg.kingsCanBeCaptured && b[mr][mc].king) return;
-    const lr = r + 2 * dr, lc = c + 2 * dc;
-    if (onBoard(lr, lc) && !b[lr][lc]) {
-      moves.push({ row: lr, col: lc, capture: true, capturedRow: mr, capturedCol: mc });
-    }
-  }
-
-  function flyingRegular(b, r, c, dr, dc, cfg, moves) {
-    for (let s = 1; s < cfg.boardSize; s++) {
-      const nr = r + dr * s, nc = c + dc * s;
-      if (!onBoard(nr, nc) || b[nr][nc]) break;
-      moves.push({ row: nr, col: nc, capture: false });
-    }
-  }
-
-  function flyingCapture(b, r, c, dr, dc, piece, cfg, moves) {
-    let found = false, fr, fc;
-    for (let s = 1; s < cfg.boardSize; s++) {
-      const nr = r + dr * s, nc = c + dc * s;
-      if (!onBoard(nr, nc)) break;
-      if (!found) {
-        if (!b[nr][nc]) continue;
-        if (b[nr][nc].color === piece.color) break;
-        if (!cfg.kingsCanBeCaptured && b[nr][nc].king) break;
-        found = true; fr = nr; fc = nc;
-      } else {
-        if (b[nr][nc]) break;
-        moves.push({ row: nr, col: nc, capture: true, capturedRow: fr, capturedCol: fc });
-      }
-    }
-  }
-
-  function getAllPlayerMoves(b, color, cfg) {
-    const all = [];
-    let anyCapture = false;
-    for (let r = 0; r < cfg.boardSize; r++) {
-      for (let c = 0; c < cfg.boardSize; c++) {
-        if (b[r][c] && b[r][c].color === color) {
-          const pm = getMovesForPiece(b, r, c, cfg);
-          pm.forEach(m => {
-            all.push({ fromRow: r, fromCol: c, ...m });
-            if (m.capture) anyCapture = true;
-          });
-        }
-      }
-    }
-    if (cfg.mandatoryCapture && anyCapture) return all.filter(m => m.capture);
-    return all;
-  }
-
-  function getPieceCaptures(b, r, c, cfg) {
-    return getMovesForPiece(b, r, c, cfg).filter(m => m.capture);
+  async function copyText(text, okMsg) {
+    try { await navigator.clipboard.writeText(text); showToast(okMsg || 'Link copied to clipboard!'); return true; }
+    catch { showToast(text, 5000); return false; }
   }
 
   // ===== GAME LOGIC =====
+  function currentState() {
+    return { board, currentPlayer, captured, turnNumber, lastMove, noCaptureStreakBlack, noCaptureStreakWhite };
+  }
+
   function makeMove(fromR, fromC, toR, toC) {
-    const piece = board[fromR][fromC];
     const moveInfo = validMoves.find(m => m.row === toR && m.col === toC);
+    if (!moveInfo || !board[fromR][fromC]) return false;
+    // the undo point is the position before the turn's first step
+    if (!multiJumpPos) moveHistory.push(E.snapshot(currentState()));
+    const piece = board[fromR][fromC];
+    const step = E.applyStep(board, fromR, fromC, moveInfo, config);
+    if (step.removedColor) captured[step.removedColor]++;
+    mustCaptureHint = [];
 
-    let wasCapture = false;
-    if (moveInfo && moveInfo.capture) {
-      wasCapture = true;
-      const cap = board[moveInfo.capturedRow][moveInfo.capturedCol];
-      if (cap) {
-        if (config.doubleCaptureKings && cap.king) {
-          cap.king = false;
-          board[moveInfo.capturedRow][moveInfo.capturedCol] = cap;
-        } else {
-          captured[cap.color]++;
-          board[moveInfo.capturedRow][moveInfo.capturedCol] = null;
-        }
-      }
-    }
-
-    board[toR][toC] = piece;
-    board[fromR][fromC] = null;
-
-    const promoted = tryPromote(toR, toC, piece);
-    const isKc = piece.king === 'knight' || piece.king === 'crown';
-
-    if (wasCapture && !promoted && !isKc) {
-      const more = getPieceCaptures(board, toR, toC, config);
-      if (more.length > 0) {
-        selectedCell = { row: toR, col: toC };
-        validMoves = more;
-        multiJumpPos = { row: toR, col: toC };
-        renderBoard();
-        renderUI();
-        return true;
-      }
+    if (step.more.length > 0) {
+      selectedCell = { row: toR, col: toC };
+      validMoves = step.more;
+      multiJumpPos = { row: toR, col: toC };
+      renderBoard();
+      renderUI();
+      return true;
     }
 
     if (piece.king && config.shuffleKingOnMove) {
-      const modes = getActiveModes(config);
+      const modes = E.getActiveModes(config);
       if (modes.length > 0) piece.king = modes[Math.floor(Math.random() * modes.length)];
     }
 
+    const wasCapture = step.wasCapture || (multiJumpPos !== null);
     lastMove = { from: { row: fromR, col: fromC }, to: { row: toR, col: toC } };
     selectedCell = null;
     validMoves = [];
@@ -552,16 +243,14 @@
     if (!wasCapture) {
       if (currentPlayer === 'black') noCaptureStreakBlack++;
       else noCaptureStreakWhite++;
-    } else {
-      if (currentPlayer === 'black') noCaptureStreakBlack = 0;
-      else noCaptureStreakWhite = 0;
-    }
+    } else if (currentPlayer === 'black') noCaptureStreakBlack = 0;
+    else noCaptureStreakWhite = 0;
 
     if (config.drawLimitEnabled) {
       const streak = currentPlayer === 'black' ? noCaptureStreakBlack : noCaptureStreakWhite;
       const limit = currentPlayer === 'black' ? config.drawLimitBlack : config.drawLimitWhite;
       if (streak >= limit && limit > 0) {
-        endInDraw(cap(currentPlayer) + ' reached the move limit');
+        endInDraw(cap(currentPlayer) + ' reached the move limit without a capture');
         return true;
       }
     }
@@ -570,52 +259,14 @@
     return true;
   }
 
-  function tryPromote(r, c, piece) {
-    if (piece.king) return false;
-    const promote = config.promoteAnyBack
-      ? (r === 0 || r === config.boardSize - 1)
-      : (piece.color === 'black' ? r === config.boardSize - 1 : r === 0);
-    if (promote) {
-      if (config.randomPromotion) {
-        const modes = getActiveModes(config);
-        piece.king = modes[Math.floor(Math.random() * modes.length)];
-      } else {
-        piece.king = config.kingMove;
-      }
-      return true;
-    }
-    return false;
-  }
-
   function endTurn() {
     stopTimer();
-    moveHistory.push({
-      board: cloneBoard(board),
-      currentPlayer: currentPlayer,
-      captured: { black: captured.black, white: captured.white },
-      turnNumber: turnNumber,
-      lastMove: lastMove ? { from: { ...lastMove.from }, to: { ...lastMove.to } } : null,
-      noCaptureStreakBlack: noCaptureStreakBlack,
-      noCaptureStreakWhite: noCaptureStreakWhite,
-    });
-
     currentPlayer = opp(currentPlayer);
     turnNumber++;
+    E.rollRandomKings(board, currentPlayer, config);
 
-    const hasPieces = board.some(row => row.some(cell => cell && cell.color === currentPlayer));
-    if (!hasPieces) {
-      if (config.suicideMode) endGame(currentPlayer, 'wins by losing all pieces');
-      else endGame(opp(currentPlayer), 'has lost all pieces');
-      return;
-    }
-
-    const allMoves = getAllPlayerMoves(board, currentPlayer, config);
-    if (allMoves.length === 0) {
-      if (config.stalemateWins) endGame(currentPlayer, 'wins with no moves');
-      else if (config.suicideMode) endGame(currentPlayer, 'wins by having no moves');
-      else endGame(opp(currentPlayer), 'has no valid moves');
-      return;
-    }
+    const outcome = E.checkOutcome(board, currentPlayer, config);
+    if (outcome) { endGame(outcome.winner, outcome.reason); return; }
 
     if (config.timer > 0) startTimer();
     renderBoard();
@@ -624,19 +275,19 @@
   }
 
   function handleCellClick(r, c) {
-    if (gamePhase !== 'playing' || undoRequestActive) return;
+    if (gamePhase !== 'playing') return;
+    const mine = myColor();
+    if (mine && currentPlayer !== mine) { showToast("It's your opponent's turn"); return; }
 
     if (multiJumpPos) {
       if (validMoves.some(m => m.row === r && m.col === c)) {
         makeMove(multiJumpPos.row, multiJumpPos.col, r, c);
-      }
+      } else showToast('Keep jumping with the same piece');
       return;
     }
 
     const cell = board[r][c];
     if (cell && cell.color === currentPlayer) {
-      if (mp.role === 'host' && cell.color !== 'black') return;
-      if (mp.role === 'guest' && cell.color !== 'white') return;
       if (selectedCell && selectedCell.row === r && selectedCell.col === c) {
         deselectPiece(); return;
       }
@@ -654,11 +305,14 @@
 
   function selectPiece(r, c) {
     selectedCell = { row: r, col: c };
-    validMoves = getMovesForPiece(board, r, c, config);
-    if (config.mandatoryCapture) {
-      const allMoves = getAllPlayerMoves(board, currentPlayer, config);
-      if (allMoves.some(m => m.capture) && !validMoves.some(m => m.capture)) {
-        validMoves = [];
+    // while any capture is required, a piece may only capture
+    validMoves = E.legalMovesForPiece(board, r, c, config);
+    mustCaptureHint = [];
+    if (validMoves.length === 0 && config.mandatoryCapture) {
+      const must = E.mustCapturePieces(board, currentPlayer, config);
+      if (must.length) {
+        mustCaptureHint = must;
+        showToast('A capture is required: use a highlighted piece');
       }
     }
     renderBoard();
@@ -674,59 +328,43 @@
   }
 
   // ===== GAME OVER =====
+  function youLine(winner) {
+    const mine = myColor();
+    if (!mine || !winner) return '';
+    return winner === mine ? 'You win!' : 'You lose.';
+  }
+
   function endInDraw(reason) {
     gamePhase = 'gameover';
     stopTimer();
     dom.winnerText.textContent = 'Draw!';
     dom.winnerReason.textContent = reason || '';
+    delete dom.gameOverModal.dataset.winner;
     dom.gameOverModal.classList.remove('hidden');
     renderBoard();
     renderUI();
     syncMPState();
   }
 
+  // reason names the player it is about ("White has no pieces left")
   function endGame(winner, reason) {
     gamePhase = 'gameover';
     stopTimer();
-    dom.winnerText.textContent = cap(winner) + ' Wins!';
-    dom.winnerReason.textContent = reason;
+    dom.winnerText.textContent = cap(winner) + ' wins!';
+    dom.winnerReason.textContent = [reason, youLine(winner)].filter(Boolean).join(' · ');
+    dom.gameOverModal.dataset.winner = winner;
     dom.gameOverModal.classList.remove('hidden');
     renderBoard();
     renderUI();
     syncMPState();
   }
 
-  // ===== UNDO =====
-  function requestUndo() {
-    if (gamePhase !== 'playing' || moveHistory.length === 0 || undoRequestActive) return;
-
-    const lastSnap = moveHistory[moveHistory.length - 1];
-    const moveMaker = lastSnap.currentPlayer;
-    const requester = opp(moveMaker);
-
-    undoRequestActive = true;
-    stopTimer();
-
-    dom.undoRequestText.textContent = cap(requester) + ' wants to undo ' + cap(moveMaker) + "'s last move.";
-    dom.undoResponder.textContent = cap(moveMaker) + ', do you approve?';
-
-    dom.undoYesBtn.onclick = function () {
-      dom.undoModal.classList.add('hidden');
-      undoRequestActive = false;
-      executeUndo();
-    };
-
-    dom.undoNoBtn.onclick = function () {
-      dom.undoModal.classList.add('hidden');
-      undoRequestActive = false;
-      if (config.timer > 0) startTimer();
-    };
-
-    dom.undoModal.classList.remove('hidden');
-  }
-
-  function executeUndo() {
-    if (moveHistory.length === 0) return;
+  // ===== UNDO (local games only) =====
+  // The snapshot is the position before the last turn, so the player who moved gets
+  // the turn back; no approval step is needed when both players share the device.
+  function undo() {
+    if (mp.role) return;
+    if (gamePhase !== 'playing' || moveHistory.length === 0) { showToast('Nothing to undo'); return; }
     const snap = moveHistory.pop();
     board = snap.board;
     currentPlayer = snap.currentPlayer;
@@ -736,11 +374,11 @@
     selectedCell = null;
     validMoves = [];
     multiJumpPos = null;
-    noCaptureStreakBlack = snap.noCaptureStreakBlack !== undefined ? snap.noCaptureStreakBlack : 0;
-    noCaptureStreakWhite = snap.noCaptureStreakWhite !== undefined ? snap.noCaptureStreakWhite : 0;
-
+    mustCaptureHint = [];
+    noCaptureStreakBlack = snap.noCaptureStreakBlack || 0;
+    noCaptureStreakWhite = snap.noCaptureStreakWhite || 0;
+    E.rollRandomKings(board, currentPlayer, config);
     if (config.timer > 0) { stopTimer(); startTimer(); }
-    dom.undoModal.classList.add('hidden');
     renderBoard();
     renderUI();
   }
@@ -762,7 +400,7 @@
       if (timerState[currentPlayer] <= 0) {
         clearInterval(timerState.interval);
         timerState.interval = null;
-        endGame(opp(currentPlayer), 'ran out of time');
+        endGame(opp(currentPlayer), cap(currentPlayer) + ' ran out of time');
       }
     }, 1000);
   }
@@ -776,6 +414,7 @@
   }
 
   function updateTimerDisplay() {
+    if (!timerState) return;
     dom.timerBlack.textContent = fmtTime(timerState.black);
     dom.timerWhite.textContent = fmtTime(timerState.white);
     dom.timerBlack.classList.toggle('timer-low', timerState.black <= 10);
@@ -788,25 +427,32 @@
   }
 
   // ===== RENDERING =====
+  // Online, each player sees the board from their own side: the host plays Black,
+  // whose pieces start at the top, so the host's view is turned around.
+  function boardFlipped() { return mp.role === 'host'; }
+
   function renderBoard() {
     const size = config.boardSize;
+    const flip = boardFlipped();
     dom.board.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
     dom.board.style.gridTemplateRows = `repeat(${size}, 1fr)`;
     dom.board.innerHTML = '';
+    const showMoves = config.highlightMoves !== false;
 
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
+    for (let vr = 0; vr < size; vr++) {
+      for (let vc = 0; vc < size; vc++) {
+        const r = flip ? size - 1 - vr : vr;
+        const c = flip ? size - 1 - vc : vc;
         const cell = document.createElement('div');
         cell.className = 'cell ' + (isDark(r, c) ? 'dark' : 'light');
         cell.dataset.row = r;
         cell.dataset.col = c;
 
-        const isValid = validMoves.some(m => m.row === r && m.col === c);
-        if (isValid) {
+        if (showMoves) {
           const info = validMoves.find(m => m.row === r && m.col === c);
-          cell.classList.add(info && info.capture ? 'highlight-capture' : 'highlight');
+          if (info) cell.classList.add(info.capture ? 'highlight-capture' : 'highlight');
         }
-
+        if (mustCaptureHint.some(p => p.row === r && p.col === c)) cell.classList.add('must-capture');
         if (selectedCell && selectedCell.row === r && selectedCell.col === c) cell.classList.add('selected');
         if (lastMove) {
           if (lastMove.from.row === r && lastMove.from.col === c) cell.classList.add('last-move-from');
@@ -828,13 +474,35 @@
     }
   }
 
+  function statusCard(el, color) {
+    const mine = myColor();
+    const who = mine ? (color === mine ? 'You' : 'Opponent') : cap(color);
+    const lost = captured[color];   // pieces of this colour taken off the board
+    el.classList.toggle('active', gamePhase === 'playing' && currentPlayer === color);
+    el.innerHTML = `<span class="status-swatch ${color}-piece"></span>
+      <span class="status-name">${who}${mine ? ` <small>(${cap(color)})</small>` : ''}</span>
+      <span class="status-lost" title="${cap(color)} pieces captured">lost ${lost}</span>`;
+  }
+
   function renderUI() {
-    const label = cap(currentPlayer);
-    dom.turnText.textContent = label + "'s Turn";
+    const mine = myColor();
+    if (gamePhase === 'gameover') {
+      dom.turnText.textContent = 'Game over';
+    } else if (mine) {
+      dom.turnText.textContent = currentPlayer === mine ? `Your turn (${cap(mine)})` : `${cap(currentPlayer)}'s turn`;
+    } else {
+      dom.turnText.textContent = cap(currentPlayer) + "'s turn";
+    }
     dom.turnText.className = currentPlayer + '-turn';
     dom.turnCounter.textContent = 'Turn ' + turnNumber;
-    dom.capturedBlack.textContent = 'Black: ' + captured.black;
-    dom.capturedWhite.textContent = 'White: ' + captured.white;
+    statusCard(dom.statusBlack, 'black');
+    statusCard(dom.statusWhite, 'white');
+    // the player at the bottom of the screen is listed last
+    const bottom = boardFlipped() ? 'black' : 'white';
+    dom.statusBlack.style.order = bottom === 'black' ? 2 : 0;
+    dom.statusWhite.style.order = bottom === 'white' ? 2 : 0;
+    dom.undoBtn.hidden = !!mp.role;
+    dom.undoBtn.disabled = gamePhase !== 'playing' || moveHistory.length === 0;
 
     if (config.timer > 0) {
       dom.timerDisplay.classList.remove('hidden');
@@ -846,12 +514,12 @@
 
   // ===== BOARD EDITOR =====
   function initEditor(optionalBoard) {
-    const size = Math.max(2, +dom.editorBoardSize.value || 8);
-    const rows = Math.max(0, +dom.editorRowsPerPlayer.value || 3);
+    const size = boardSize(dom.editorBoardSize.value);
+    const rows = rowsPerPlayer(dom.editorRowsPerPlayer.value);
     if (optionalBoard) {
       editorBoardData = cloneBoard(optionalBoard);
     } else {
-      editorBoardData = createBoard({ boardSize: size, rowsPerPlayer: rows });
+      editorBoardData = E.createBoard({ boardSize: size, rowsPerPlayer: rows });
     }
     renderEditor();
   }
@@ -862,7 +530,7 @@
   };
 
   function renderEditor() {
-    const size = Math.max(2, +dom.editorBoardSize.value || 8);
+    const size = boardSize(dom.editorBoardSize.value);
     const el = dom.editorBoard;
     if (!editorBoardData || editorBoardData.length !== size) {
       initEditor();
@@ -916,17 +584,13 @@
   }
 
   function clearEditor() {
-    const size = Math.max(2, +dom.editorBoardSize.value || 8);
+    const size = boardSize(dom.editorBoardSize.value);
     editorBoardData = Array.from({ length: size }, () => Array(size).fill(null));
     renderEditor();
   }
 
   function resetEditor() {
     initEditor();
-  }
-
-  function getEditorBoard() {
-    return editorBoardData ? cloneBoard(editorBoardData) : null;
   }
 
   // ===== VISUAL =====
@@ -944,11 +608,30 @@
   }
 
   // ===== GAME START =====
+  function resetGameState() {
+    selectedCell = null;
+    validMoves = [];
+    captured = { black: 0, white: 0 };
+    turnNumber = 1;
+    multiJumpPos = null;
+    lastMove = null;
+    moveHistory = [];
+    mustCaptureHint = [];
+    noCaptureStreakBlack = 0;
+    noCaptureStreakWhite = 0;
+    gamePhase = 'playing';
+  }
+
+  function showGamePanel() {
+    dom.settingsPanel.classList.add('hidden');
+    dom.gamePanel.classList.remove('hidden');
+    dom.gameOverModal.classList.add('hidden');
+  }
+
   function startGame(cfg, optBoard) {
     config = { ...cfg };
     hideMPOverlay();
 
-    // Guest uses received board
     if (optBoard) {
       board = cloneBoard(optBoard);
       config.boardSize = board.length;
@@ -958,81 +641,77 @@
         board = cloneBoard(editorBoardData);
         config.boardSize = board.length;
       } else {
-        board = createBoard(config);
+        board = E.createBoard(config);
       }
     }
 
-    if (config.startingPlayer === 'random') {
-      currentPlayer = Math.random() < 0.5 ? 'black' : 'white';
-    } else {
-      currentPlayer = config.startingPlayer;
-    }
+    currentPlayer = config.startingPlayer === 'random'
+      ? (Math.random() < 0.5 ? 'black' : 'white')
+      : config.startingPlayer;
 
-    selectedCell = null;
-    validMoves = [];
-    captured = { black: 0, white: 0 };
-    turnNumber = 1;
-    multiJumpPos = null;
-    lastMove = null;
-    moveHistory = [];
-    undoRequestActive = false;
-    noCaptureStreakBlack = 0;
-    noCaptureStreakWhite = 0;
-    gamePhase = 'playing';
-
+    resetGameState();
+    E.rollRandomKings(board, currentPlayer, config);
     applyVisual(config);
     if (config.timer > 0) { initTimer(); startTimer(); }
     else timerState = null;
-
-    dom.settingsPanel.classList.add('hidden');
-    dom.gamePanel.classList.remove('hidden');
-    dom.gameOverModal.classList.add('hidden');
-    dom.undoModal.classList.add('hidden');
-
-    const allMoves = getAllPlayerMoves(board, currentPlayer, config);
-    if (allMoves.length === 0) {
-      if (config.stalemateWins || config.suicideMode) endGame(currentPlayer, 'wins by having no moves');
-      else endGame(opp(currentPlayer), 'has no valid moves');
-      return;
-    }
-
-    renderBoard();
-    renderUI();
+    showGamePanel();
     updateRoleBadge();
 
     if (mp.role === 'host' && mp.connected) {
-      sendMP('gameStart', {
-        config: config,
-        board: encodeBoard(board),
-        currentPlayer: currentPlayer,
-      });
+      sendMP('gameStart', { config: config, board: E.encodeBoard(board), currentPlayer: currentPlayer });
     }
+
+    const outcome = E.checkOutcome(board, currentPlayer, config);
+    if (outcome) { endGame(outcome.winner, outcome.reason); return; }
+
+    renderBoard();
+    renderUI();
   }
 
   function resetToSettings() {
     gamePhase = 'settings';
     stopTimer();
     timerState = null;
-    undoRequestActive = false;
     dom.gamePanel.classList.add('hidden');
     dom.settingsPanel.classList.remove('hidden');
     dom.gameOverModal.classList.add('hidden');
-    dom.undoModal.classList.add('hidden');
     updateRoleBadge();
+    updateShareButtons();
     if (mp.role === 'guest') {
-      showMPOverlay('Host is in settings', 'Waiting for host to start the next game', false);
+      showMPOverlay('Host is in settings', 'Waiting for the host to start the next game', false);
     }
+  }
+
+  // Exit mid-game asks first. A guest who exits leaves the room for good.
+  function exitGame() {
+    if (gamePhase === 'playing' && !window.confirm(mp.role ? 'Leave this online game? Your opponent will be told you left.' : 'Leave this game? The current position will be lost.')) return;
+    if (mp.role === 'guest') { leaveRoom(); return; }
+    resetToSettings();
   }
 
   // ===== MULTIPLAYER =====
   function genRoomId() {
-    return Math.random().toString(36).slice(2, 8);
+    const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+    const buf = new Uint32Array(8);
+    crypto.getRandomValues(buf);
+    return 'cc-' + Array.from(buf, (n) => chars[n % chars.length]).join('');
   }
 
-  function showMPOverlay(text, detail, showSpinner) {
+  // actions: [{ label, primary, onClick }]
+  function showMPOverlay(text, detail, showSpinner, actions, link) {
     dom.mpStatusText.textContent = text;
     dom.mpStatusDetail.textContent = detail || '';
     dom.mpSpinner.style.display = showSpinner !== false ? 'block' : 'none';
+    dom.mpLink.textContent = link || '';
+    dom.mpLink.classList.toggle('hidden', !link);
+    dom.mpActions.innerHTML = '';
+    (actions || []).forEach((a) => {
+      const b = document.createElement('button');
+      b.className = 'btn ' + (a.primary ? 'btn-primary' : 'btn-secondary');
+      b.textContent = a.label;
+      b.addEventListener('click', a.onClick);
+      dom.mpActions.appendChild(b);
+    });
     dom.mpOverlay.classList.remove('hidden');
   }
 
@@ -1041,24 +720,48 @@
   }
 
   function updateRoleBadge() {
-    if (mp.role && dom.gamePanel && !dom.gamePanel.classList.contains('hidden')) {
-      dom.roleBadge.textContent = mp.role === 'host' ? 'HOST' : 'GUEST';
-      dom.roleBadge.className = 'role-badge ' + mp.role;
+    const mine = myColor();
+    if (mine && dom.gamePanel && !dom.gamePanel.classList.contains('hidden')) {
+      dom.roleBadge.textContent = 'You: ' + cap(mine);
+      dom.roleBadge.className = 'role-badge ' + mine;
+      dom.roleBadge.title = mp.role === 'host' ? 'You host this room and play Black' : 'You joined this room and play White';
       dom.roleBadge.classList.remove('hidden');
     } else if (dom.roleBadge) {
       dom.roleBadge.classList.add('hidden');
     }
   }
 
+  function updateShareButtons() {
+    if (mp.role === 'guest') {
+      dom.inviteBtn.textContent = 'Joined a room';
+      dom.inviteBtn.disabled = true;
+      dom.shareLinkBtn.disabled = true;
+    } else if (mp.role === 'host') {
+      dom.inviteBtn.textContent = mp.connected ? 'Opponent connected' : 'Copy invite link';
+      dom.inviteBtn.disabled = mp.connected;
+      dom.shareLinkBtn.disabled = false;
+    } else {
+      dom.inviteBtn.textContent = 'Invite a player';
+      dom.inviteBtn.disabled = false;
+      dom.shareLinkBtn.disabled = false;
+    }
+  }
+
   function sendMP(type, data) {
     if (mp.conn && mp.connected) {
-      mp.conn.send({ type: type, data: data });
+      try { mp.conn.send({ type: type, data: data }); } catch (e) { /* channel closing */ }
     }
   }
 
   function handleMPMessage(msg) {
+    mp.lastSeen = Date.now();
     if (!msg || !msg.type) return;
     switch (msg.type) {
+      case 'ping':
+        break;
+      case 'bye':
+        onPeerGone(true);
+        break;
       case 'stateSync':
         applyRemoteState(msg.data);
         break;
@@ -1069,9 +772,7 @@
         if (mp.role === 'guest') {
           mp.receivedSettings = msg.data;
           applyVisual(msg.data);
-          dom.roleBadge.classList.remove('hidden');
-          dom.roleBadge.textContent = 'GUEST';
-          dom.roleBadge.className = 'role-badge guest';
+          updateRoleBadge();
         }
         break;
       case 'resetGame':
@@ -1087,50 +788,58 @@
     if (!mp.connected) return;
     const isOver = gamePhase === 'gameover';
     sendMP('stateSync', {
-      board: encodeBoard(board),
+      board: E.encodeBoard(board),
       currentPlayer: currentPlayer,
       captured: captured,
       turnNumber: turnNumber,
       gamePhase: gamePhase,
       lastMove: lastMove || null,
       config: config,
-      moveHistory: moveHistory,
       noCaptureStreakBlack: noCaptureStreakBlack,
       noCaptureStreakWhite: noCaptureStreakWhite,
-      gameOver: isOver ? { winner: dom.winnerText.textContent, reason: dom.winnerReason.textContent, isDraw: dom.winnerText.textContent === 'Draw!' } : null,
+      gameOver: isOver ? {
+        winner: dom.gameOverModal.dataset.winner || null,
+        text: dom.winnerText.textContent,
+        reason: dom.winnerReason.textContent.split(' · ')[0],
+        isDraw: dom.winnerText.textContent === 'Draw!',
+      } : null,
     });
   }
 
   function applyRemoteState(data) {
     if (!data) return;
-    board = decodeBoard(data.board) || board;
-    currentPlayer = data.currentPlayer;
+    board = E.decodeBoard(data.board) || board;
+    currentPlayer = data.currentPlayer === 'white' ? 'white' : 'black';
     captured = data.captured || { black: 0, white: 0 };
     turnNumber = data.turnNumber || 1;
     gamePhase = data.gamePhase || 'playing';
     noCaptureStreakBlack = data.noCaptureStreakBlack || 0;
     noCaptureStreakWhite = data.noCaptureStreakWhite || 0;
-    moveHistory = data.moveHistory || [];
+    moveHistory = [];
     config = data.config || config;
     if (data.lastMove) lastMove = data.lastMove;
+    selectedCell = null;
+    validMoves = [];
+    multiJumpPos = null;
+    mustCaptureHint = [];
     if (data.gameOver) {
       gamePhase = 'gameover';
       stopTimer();
       if (data.gameOver.isDraw) {
         dom.winnerText.textContent = 'Draw!';
+        dom.winnerReason.textContent = data.gameOver.reason || '';
       } else {
-        dom.winnerText.textContent = data.gameOver.winner;
+        const w = data.gameOver.winner;
+        dom.winnerText.textContent = w ? cap(w) + ' wins!' : data.gameOver.text;
+        dom.winnerReason.textContent = [data.gameOver.reason, youLine(w)].filter(Boolean).join(' · ');
       }
-      dom.winnerReason.textContent = data.gameOver.reason || '';
       dom.gameOverModal.classList.remove('hidden');
       renderBoard();
       renderUI();
       return;
     }
-    undoRequestActive = false;
-    selectedCell = null;
-    validMoves = [];
-    multiJumpPos = null;
+    E.rollRandomKings(board, currentPlayer, config);
+    if (dom.gamePanel.classList.contains('hidden')) showGamePanel();
     renderBoard();
     renderUI();
   }
@@ -1139,105 +848,186 @@
     if (!data) return;
     hideMPOverlay();
     config = data.config || DEFAULT_CONFIG;
-    if (data.board) {
-      board = decodeBoard(data.board) || createBoard(config);
-    } else {
-      board = createBoard(config);
-    }
-    currentPlayer = data.currentPlayer || 'black';
-    captured = { black: 0, white: 0 };
-    turnNumber = 1;
-    selectedCell = null;
-    validMoves = [];
-    multiJumpPos = null;
-    lastMove = null;
-    moveHistory = [];
-    noCaptureStreakBlack = 0;
-    noCaptureStreakWhite = 0;
-    gamePhase = 'playing';
+    board = (data.board && E.decodeBoard(data.board)) || E.createBoard(config);
+    config.boardSize = board.length;
+    currentPlayer = data.currentPlayer === 'white' ? 'white' : 'black';
+    resetGameState();
+    E.rollRandomKings(board, currentPlayer, config);
     applyVisual(config);
-    dom.settingsPanel.classList.add('hidden');
-    dom.gamePanel.classList.remove('hidden');
-    dom.gameOverModal.classList.add('hidden');
-    dom.undoModal.classList.add('hidden');
+    showGamePanel();
     updateRoleBadge();
     renderBoard();
     renderUI();
   }
 
-  function initHostPeer(roomId) {
+  // Heartbeat: PeerJS does not reliably fire 'close' when the other tab is closed, so
+  // both sides ping and treat a long silence (or a 'bye') as the other side leaving.
+  function startHeartbeat() {
+    stopHeartbeat();
+    mp.lastSeen = Date.now();
+    mp.heartbeat = setInterval(() => {
+      if (!mp.connected) return;
+      sendMP('ping', Date.now());
+      if (Date.now() - mp.lastSeen > PEER_TIMEOUT_MS) onPeerGone(false);
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    if (mp.heartbeat) clearInterval(mp.heartbeat);
+    mp.heartbeat = null;
+  }
+
+  function onPeerGone(said) {
+    if (!mp.connected) return;
+    mp.connected = false;
+    stopHeartbeat();
+    try { if (mp.conn) mp.conn.close(); } catch (e) { /* already closed */ }
+    mp.conn = null;
+    stopTimer();
+    updateShareButtons();
+    if (mp.role === 'host') {
+      const inGame = gamePhase === 'playing';
+      showMPOverlay('Your opponent left', inGame
+        ? 'They can come back with the same invite link; the game continues where it stopped.'
+        : 'They can come back with the same invite link.', true, [
+        { label: 'Copy invite link', onClick: () => copyText(inviteURL()) },
+        { label: 'Close room', primary: true, onClick: () => { closeRoom(); resetToSettings(); } },
+      ], inviteURL());
+    } else {
+      showMPOverlay('The host left', said ? 'The host closed the game.' : 'The connection to the host was lost.', false, [
+        { label: 'Back to settings', primary: true, onClick: () => leaveRoom() },
+      ]);
+    }
+  }
+
+  function wireConnection(conn) {
+    mp.conn = conn;
+    conn.on('data', handleMPMessage);
+    conn.on('close', () => onPeerGone(false));
+    conn.on('error', () => onPeerGone(false));
+  }
+
+  function initHostPeer(roomId, attempt) {
+    attempt = attempt || 0;
     mp.role = 'host';
     mp.roomId = roomId;
-    mp.peer = new Peer(roomId);
-    mp.peer.on('open', (id) => {
-      showMPOverlay('Waiting for opponent...', 'Share the link to invite someone', true);
+    showMPOverlay('Creating a room...', 'Connecting to the PeerJS server', true, [
+      { label: 'Cancel', onClick: () => { closeRoom(); } },
+    ]);
+    const peer = new Peer(roomId);
+    mp.peer = peer;
+    peer.on('open', (id) => {
+      if (mp.peer !== peer) return;
+      mp.roomId = id;
+      updateShareButtons();
+      copyText(inviteURL(), 'Invite link copied!');
+      showMPOverlay('Waiting for an opponent...', 'Send this link to a friend. You play Black; they play White.', true, [
+        { label: 'Copy link', onClick: () => copyText(inviteURL()) },
+        { label: 'Cancel', onClick: () => { closeRoom(); } },
+      ], inviteURL());
     });
-    mp.peer.on('connection', (conn) => {
-      mp.conn = conn;
-      mp.connected = true;
-      conn.on('data', handleMPMessage);
-      conn.on('close', () => {
-        mp.connected = false;
-        showMPOverlay('Connection lost', 'The opponent disconnected', false);
+    peer.on('connection', (conn) => {
+      if (mp.peer !== peer) return;
+      // one opponent at a time: a second visitor is turned away
+      if (mp.connected) { conn.on('open', () => { conn.send({ type: 'bye' }); setTimeout(() => conn.close(), 200); }); return; }
+      conn.on('open', () => {
+        wireConnection(conn);
+        mp.connected = true;
+        startHeartbeat();
+        hideMPOverlay();
+        updateShareButtons();
+        updateRoleBadge();
+        sendMP('settingsSync', gamePhase === 'settings' ? getSettingsFromUI() : config);
+        if (gamePhase === 'playing' || gamePhase === 'gameover') {
+          // a returning guest picks the game up where it stopped
+          sendMP('gameStart', { config: config, board: E.encodeBoard(board), currentPlayer: currentPlayer });
+          syncMPState();
+          if (gamePhase === 'playing' && config.timer > 0) startTimer();
+          showToast('Your opponent is back');
+        } else {
+          showToast('Opponent connected! Press Start Game to begin');
+        }
       });
-      hideMPOverlay();
-      if (gamePhase === 'settings') {
-        showToast('Opponent connected! Press Start Game to begin');
-        dom.generateLinkBtn.textContent = 'Room: ' + roomId;
-        dom.generateLinkBtn.disabled = true;
-        sendMP('settingsSync', getSettingsFromUI());
-      }
-      updateRoleBadge();
     });
-    mp.peer.on('error', (err) => {
-      if (err.type === 'unavailable-id') {
-        genRoomId();
-        mp.roomId = roomId = genRoomId();
-        mp.peer = new Peer(roomId);
+    peer.on('error', (err) => {
+      if (mp.peer !== peer) return;
+      if (err && err.type === 'unavailable-id' && attempt < MAX_ID_RETRIES) {
+        // the random id is taken: start over with a fresh one, handlers included
+        peer.destroy();
+        initHostPeer(genRoomId(), attempt + 1);
+        return;
       }
+      if (mp.connected) return;   // a late error after the game started is handled by the heartbeat
+      showMPOverlay('Could not create a room', (err && err.type ? err.type + ': ' : '') + 'check your connection and try again.', false, [
+        { label: 'Close', primary: true, onClick: () => { closeRoom(); } },
+      ]);
     });
   }
 
   function initGuestPeer(roomId) {
     mp.role = 'guest';
     mp.roomId = roomId;
-    showMPOverlay('Connecting...', 'Waiting for host', true);
-    mp.peer = new Peer();
-    mp.peer.on('open', () => {
-      const conn = mp.peer.connect(roomId, { reliable: true });
-      mp.conn = conn;
+    updateShareButtons();
+    showMPOverlay('Connecting...', 'Waiting for the host', true);
+    const peer = new Peer();
+    mp.peer = peer;
+    peer.on('open', () => {
+      const conn = peer.connect(roomId, { reliable: true });
       conn.on('open', () => {
+        wireConnection(conn);
         mp.connected = true;
-        hideMPOverlay();
-        showMPOverlay('Connected!', 'Waiting for host to start the game...', false);
+        startHeartbeat();
+        showMPOverlay('Connected!', 'You play White. Waiting for the host to start the game...', false, [
+          { label: 'Leave', onClick: () => leaveRoom() },
+        ]);
         updateRoleBadge();
       });
-      conn.on('data', handleMPMessage);
-      conn.on('close', () => {
-        mp.connected = false;
-        showMPOverlay('Connection lost', 'The host disconnected', false);
-      });
     });
-    mp.peer.on('error', () => {
-      showMPOverlay('Could not connect', 'The host might not be available yet. Try again later.', false);
+    peer.on('error', () => {
+      if (mp.connected) return;
+      showMPOverlay('Could not connect', 'The host might not be available yet. Try again later.', false, [
+        { label: 'Try again', primary: true, onClick: () => window.location.reload() },
+        { label: 'Play locally', onClick: () => leaveRoom() },
+      ]);
     });
+  }
+
+  // Host: stop hosting (the guest is told). Guest side uses leaveRoom().
+  function closeRoom() {
+    if (mp.connected) sendMP('bye', null);
+    stopHeartbeat();
+    const peer = mp.peer;
+    setTimeout(() => { try { if (peer) peer.destroy(); } catch (e) { /* ignore */ } }, 150);
+    mp = { role: null, peer: null, conn: null, roomId: null, connected: false, receivedSettings: null, lastSeen: 0, heartbeat: null };
+    hideMPOverlay();
+    updateShareButtons();
+    updateRoleBadge();
+  }
+
+  function leaveRoom() {
+    closeRoom();
+    history.replaceState(null, '', baseURL());
+    document.title = 'Custom Checkers';
+    resetToSettings();
+    applyConfigToUI(DEFAULT_CONFIG);
+    applyVisual(DEFAULT_CONFIG);
   }
 
   // ===== EVENTS =====
   function bindEvents() {
     dom.startGameBtn.addEventListener('click', () => {
       if (mp.role === 'guest') { showToast('Only the host can start the game'); return; }
+      if (mp.role === 'host' && !mp.connected) { showToast('No opponent yet: send the invite link or cancel the room'); return; }
       startGame(getSettingsFromUI());
     });
 
-    dom.generateLinkBtn.addEventListener('click', async () => {
-      if (!mp.role && !mp.roomId) {
-        const roomId = genRoomId();
-        initHostPeer(roomId);
-      }
-      const url = generateShareURL();
-      try { await navigator.clipboard.writeText(url); showToast('Link copied to clipboard!'); }
-      catch { showToast(url, 4000); }
+    dom.shareLinkBtn.addEventListener('click', () => {
+      copyText(generateShareURL(), 'Rules link copied! It opens a local game with these settings.');
+    });
+
+    dom.inviteBtn.addEventListener('click', () => {
+      if (mp.role === 'host' && mp.roomId) { copyText(inviteURL(), 'Invite link copied!'); return; }
+      if (!mp.role) initHostPeer(genRoomId());
     });
 
     dom.playAgainBtn.addEventListener('click', () => {
@@ -1245,9 +1035,6 @@
       if (mp.role === 'host') {
         resetToSettings();
         showToast('You can change settings, then press Start Game');
-        if (mp.connected) {
-          showMPOverlay('Waiting...', 'Press Start Game when ready', false);
-        }
         return;
       }
       if (mp.role === 'guest') {
@@ -1266,11 +1053,8 @@
       dom.kingMoveDesc.textContent = KING_DESCRIPTIONS[dom.settingKingMove.value] || '';
     });
 
-    dom.backToSettingsBtn.addEventListener('click', resetToSettings);
-    dom.undoBtn.addEventListener('click', () => {
-      if (mp.role) { showToast('Undo is not available in multiplayer'); return; }
-      requestUndo();
-    });
+    dom.backToSettingsBtn.addEventListener('click', exitGame);
+    dom.undoBtn.addEventListener('click', undo);
 
     dom.toggleEditorBtn.addEventListener('click', () => {
       const hidden = dom.editorSection.classList.toggle('hidden');
@@ -1283,10 +1067,13 @@
       dom.toggleVisualBtn.textContent = hidden ? 'Show Visual Settings' : 'Hide Visual Settings';
     });
 
+    const clampInput = (input, fn) => { input.value = fn(input.value); };
     dom.editorBoardSize.addEventListener('change', () => {
+      clampInput(dom.editorBoardSize, boardSize);
       if (!dom.editorSection.classList.contains('hidden')) initEditor();
     });
     dom.editorRowsPerPlayer.addEventListener('change', () => {
+      clampInput(dom.editorRowsPerPlayer, rowsPerPlayer);
       if (!dom.editorSection.classList.contains('hidden')) initEditor();
     });
 
@@ -1320,7 +1107,8 @@
     });
 
     dom.settingBoardSize.addEventListener('change', () => {
-      const size = Math.max(2, +dom.settingBoardSize.value || 8);
+      const size = boardSize(dom.settingBoardSize.value);
+      if (String(size) !== String(dom.settingBoardSize.value)) showToast(`Board size is ${MIN_SIZE} to ${MAX_SIZE}`);
       dom.settingBoardSize.value = size;
       document.querySelectorAll('.preset-group[data-target="setting-boardSize"] .preset-btn').forEach(b => {
         b.classList.toggle('active', +b.dataset.value === size);
@@ -1328,12 +1116,15 @@
     });
 
     dom.settingRowsPerPlayer.addEventListener('change', () => {
-      const val = Math.max(0, +dom.settingRowsPerPlayer.value || 0);
+      const val = rowsPerPlayer(dom.settingRowsPerPlayer.value);
       dom.settingRowsPerPlayer.value = val;
       document.querySelectorAll('.preset-group[data-target="setting-rowsPerPlayer"] .preset-btn').forEach(b => {
         b.classList.toggle('active', +b.dataset.value === val);
       });
     });
+
+    // tell the other side right away when this tab goes away
+    window.addEventListener('pagehide', () => { if (mp.connected) sendMP('bye', null); });
   }
 
   // ===== INIT =====
@@ -1354,22 +1145,23 @@
 
     dom.kingMoveDesc.textContent = KING_DESCRIPTIONS[dom.settingKingMove.value] || '';
     syncPresets();
+    updateShareButtons();
 
     const params = new URLSearchParams(window.location.search);
-    const roomId = params.get('room');
+    const rawRoom = params.get('room');
+    const roomId = E.sanitizeRoomId(rawRoom);
     const bdStr = params.get('bd');
-    let decodedBoard = null;
-    if (bdStr) decodedBoard = decodeBoard(bdStr);
+    const decodedBoard = bdStr ? E.decodeBoard(bdStr) : null;
 
     if (roomId) {
-      document.title = 'Checkers - Joined Game';
-      dom.generateLinkBtn.textContent = 'Joined Room';
-      dom.generateLinkBtn.disabled = true;
+      document.title = 'Custom Checkers - Online';
       initGuestPeer(roomId);
       return;
     }
+    if (rawRoom) showToast('That room link is not valid', 3000);
+    if (bdStr && !decodedBoard) showToast('The position in the link is not valid, using the normal start', 3500);
 
-    const urlCfg = parseURLConfig();
+    const urlCfg = E.parseConfigParams(params);
     if (urlCfg) {
       if (decodedBoard) urlCfg.boardSize = decodedBoard.length;
       applyConfigToUI(urlCfg);

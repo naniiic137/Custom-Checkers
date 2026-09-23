@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Custom Checkers</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
@@ -23,23 +24,13 @@
       </div>
     </div>
 
-    <div id="undo-modal" class="modal hidden">
-      <div class="modal-content">
-        <h2>Undo Request</h2>
-        <p id="undo-request-text">Opponent wants to undo their last move.</p>
-        <p class="reason" id="undo-responder">Do you approve?</p>
-        <div class="modal-actions undo-actions">
-          <button class="btn btn-primary" id="undo-yes-btn">Yes, Undo</button>
-          <button class="btn btn-secondary" id="undo-no-btn">No, Keep Move</button>
-        </div>
-      </div>
-    </div>
-
     <div id="mp-overlay" class="mp-overlay hidden">
       <div class="mp-overlay-inner">
         <div class="mp-spinner" id="mp-spinner"></div>
         <h2 id="mp-status-text">Waiting...</h2>
         <p id="mp-status-detail"></p>
+        <p id="mp-link" class="mp-link hidden"></p>
+        <div id="mp-actions" class="mp-actions"></div>
       </div>
     </div>
 
@@ -55,7 +46,7 @@
             <label for="setting-boardSize">Board Size</label>
             <span class="setting-desc">Width and height of the board (4–20)</span>
           </div>
-          <input type="number" id="setting-boardSize" value="8">
+          <input type="number" id="setting-boardSize" value="8" min="4" max="20" step="1" inputmode="numeric">
         </div>
         <div class="preset-group" data-target="setting-boardSize">
           <button class="preset-btn" data-value="6">6</button>
@@ -68,7 +59,7 @@
             <label for="setting-rowsPerPlayer">Piece Rows</label>
             <span class="setting-desc">Rows of pieces per player (1–10)</span>
           </div>
-          <input type="number" id="setting-rowsPerPlayer" value="3">
+          <input type="number" id="setting-rowsPerPlayer" value="3" min="1" max="10" step="1" inputmode="numeric">
         </div>
         <div class="preset-group" data-target="setting-rowsPerPlayer">
           <button class="preset-btn" data-value="1">1</button>
@@ -237,13 +228,13 @@
           <div class="setting-label">
             <label for="setting-drawLimitBlack">Black limit</label>
           </div>
-          <input type="number" id="setting-drawLimitBlack" value="40">
+          <input type="number" id="setting-drawLimitBlack" value="40" min="1" max="999" inputmode="numeric">
         </div>
         <div class="setting-row">
           <div class="setting-label">
             <label for="setting-drawLimitWhite">White limit</label>
           </div>
-          <input type="number" id="setting-drawLimitWhite" value="40">
+          <input type="number" id="setting-drawLimitWhite" value="40" min="1" max="999" inputmode="numeric">
         </div>
         <div class="setting-row toggle-row">
           <div class="setting-label">
@@ -333,16 +324,16 @@
         <div class="setting-row">
           <div class="setting-label">
             <label for="editor-boardSize">Editor Board Size</label>
-            <span class="setting-desc">Size for the editor board</span>
+            <span class="setting-desc">Size for the editor board (4–20)</span>
           </div>
-          <input type="number" id="editor-boardSize" value="8">
+          <input type="number" id="editor-boardSize" value="8" min="4" max="20" step="1" inputmode="numeric">
         </div>
         <div class="setting-row">
           <div class="setting-label">
             <label for="editor-rowsPerPlayer">Editor Piece Rows</label>
             <span class="setting-desc">Rows when resetting editor</span>
           </div>
-          <input type="number" id="editor-rowsPerPlayer" value="3">
+          <input type="number" id="editor-rowsPerPlayer" value="3" min="1" max="10" step="1" inputmode="numeric">
         </div>
         <div class="editor-toolbar">
           <div class="editor-tool-group">
@@ -376,7 +367,8 @@
 
       <div class="settings-actions">
         <button class="btn btn-primary btn-lg" id="start-game-btn">Start Game</button>
-        <button class="btn btn-secondary btn-lg" id="generate-link-btn">Generate Share Link</button>
+        <button class="btn btn-secondary btn-lg" id="share-link-btn" title="A link that opens a local game with these rules and the edited position">Copy rules/position link</button>
+        <button class="btn btn-secondary btn-lg" id="invite-btn" title="Create an online room and copy the invite link">Invite a player</button>
       </div>
     </div>
 
@@ -398,11 +390,12 @@
         <div id="board"></div>
       </div>
 
+      <div id="status-bar" aria-live="polite">
+        <div id="status-black" class="status-card"></div>
+        <div id="status-white" class="status-card"></div>
+      </div>
+
       <div id="game-footer">
-        <div id="captured-info">
-          <span id="captured-black">Black: 0</span>
-          <span id="captured-white">White: 0</span>
-        </div>
         <div id="footer-actions">
           <span id="turn-counter">Turn 1</span>
           <button class="btn btn-small btn-secondary" id="undo-btn">Undo</button>
@@ -411,6 +404,7 @@
     </div>
   </div>
 
+  <script src="engine.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
